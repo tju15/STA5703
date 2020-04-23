@@ -1,0 +1,236 @@
+library(randomForest)
+library(corrplot)
+library(pROC)
+library(ROCR)
+library(caret)
+library(lattice)
+library(ggplot2)
+library(e1071)
+require(caTools)
+library(reshape)
+library(tidyverse)
+library(glmnet)
+library(mice)
+library(VIM)
+library(InformationValue)
+library(MASS)
+library(RColorBrewer)
+#library(leaps)
+
+# Import Data
+setwd("~/MSDA/STA5703/Assignments")
+rawDataset = read.csv(file = "PHY_TRAIN.csv")
+
+summary(rawDataset)
+
+# Find which columns have NULL values
+print( colnames(rawDataset[ (colSums(is.na(rawDataset)) > 0) ]))
+
+# Create new dataset to contain no NULL values
+dataset1 = rawDataset
+
+for(i in 1:ncol(dataset1)){
+  dataset1[is.na(dataset1[,i]), i] <- mean(dataset1[,i], na.rm = TRUE)
+}
+
+summary(dataset1)
+
+# Remove columns w/ all zeroes
+dataset2 <- subset(dataset1, select = -c(exampleid, feat29, feat47, feat48, feat49, feat50, feat51, feat55))
+
+# Make traget variable a factor
+dataset2$target <- as.factor(dataset2$target)
+
+# Create training and test set
+set.seed(100)
+train <- sample(nrow(dataset2), 0.7*nrow(dataset2), replace = FALSE)
+TrainSet <- dataset2[train,]
+ValidSet <- dataset2[-train,]
+
+# Create Random Forest model
+rf <- randomForest(target ~ ., data = TrainSet)
+
+# Find at which "ntree" there is the lowest OOB Error
+min(rf$err.rate)
+which.min(rf$err.rate[,1])
+
+# Create model w/ ntree where OOB Error is lowest
+modelRf <- randomForest(target ~ ., data = TrainSet, ntree = 262,  importance = TRUE)
+
+# Find which 'mtry' is best for this dataset and implement into model
+RTtune = tuneRF(dataset2[,2:72], dataset2[,1], stepFactor = 0.5, plot = TRUE, 
+                ntreeTry = 262, trace = TRUE, improve = 0.05)
+
+# Final creation of model
+modelRf <- randomForest(target ~ ., data = TrainSet, ntree = 262, mtry = 16, importance = TRUE)
+
+# Test on validation dataset and show confusion matrix and accuracy
+prediction1 = predict(modelRf, ValidSet)
+y_true = as.character(ValidSet$target)
+y_pred = as.character(prediction1)
+confusionMatrix(y_pred,y_true)
+table(y_pred,y_true)
+
+# Accuracy on Test dataset
+y_trueRF = 5608 + 5198
+totalRF = 5608 + 5198 + 2074 + 2120
+accuracyRF = y_trueRF/totalRF
+accuracyRF
+tpRF = 5198
+fnRF = 2120
+fpRF = 2074
+tnRF = 5608
+TPRRF = ((tpRF) / (tpRF + fnRF))
+FPRRF = fpRF / (fpRF + tnRF)
+TNRRF = tnRF / ( fpRF + tnRF)
+PrecisionRF = ((tpRF) / (tpRF + fpRF))
+TPRRF
+FPRRF
+TNRRF
+PrecisionRF
+F1_RF = 2*(PrecisionRF * TPRRF)/(PrecisionRF + TPRRF)
+F1_RF
+# Accuracy 72.04
+
+
+TNR2 = tn2 / (fp2 + tn2)
+
+
+# AUC of ROC
+y_true <- as.integer(y_true)
+y_pred <- as.integer(y_pred)
+plotROC(y_true, y_pred)
+
+
+# Model Information
+print(modelRf)
+print(rf)
+plot(modelRf)
+hist(treesize(modelRf))
+varImpPlot(modelRf, sort = T, n.var = 15)
+# Values from VarImpPlot
+# importance(modelRf)
+# Which feautures were used most
+which.min(varUsed(modelRf))
+
+
+
+#
+#
+#
+
+# Create general logistic model to find features w/ low p-values
+log_mod = glm(target ~ ., data = TrainSet, family = binomial(link = "logit"))
+summary(log_mod)
+
+# feat4, feat8, feat12, feat13, feat14, feat15, feat20 
+# feat31, feat39, feat40, feat42, feat56, feat63, 
+# feat66, feat69, feat71, feat75
+
+# Find which features are highly correlated to be sure not to include them as interactions
+dataset3 <- dataset2
+dataset3$target <- as.numeric(dataset3$target)
+correlations <- cor(dataset3)
+corrplot(correlations, method="circle")
+
+
+# Create logistic models with interactions of important variables that are not correlated
+log_mod1 = glm(target ~ feat13 * feat71 + feat66 + feat4 + feat8 + feat14 + feat20, data = TrainSet, family = binomial(link = "logit"))
+summary(log_mod1)
+
+glm.probs1 <- plogis(predict(log_mod1, ValidSet, type = "response"))
+optCutOff1 <- optimalCutoff(ValidSet$target, glm.probs1)
+
+
+plotROC(ValidSet$target, glm.probs1) 
+
+
+confusionMatrix(ValidSet$target, glm.probs1, threshold = optCutOff1)
+
+y_true1 = 5673 + 4901
+total1 = 5673 + 4901 + 2417 + 2009
+accuracy1 = y_true1/total1
+accuracy1
+tp1 = 4901
+fn1 = 2417
+tn1 = 5673
+fp1 = 2009
+TPR1 = tp1 / (tp1 + fn1)
+FPR1 = fp1 / (fp1 + tn1)
+TNR1 = tn1 / ( fp1 + tn1)
+Precision1 = tp1 / (tp1 + fp1)
+TPR1
+FPR1
+TNR1
+Precision1
+F1_1 = 2*(Precision1 * TPR1)/(Precision1 + TPR1)
+F1_1
+# Accuracy = 70.49%
+
+
+log_mod2 = glm(target ~ feat13 * feat4 + feat66 + feat71 + feat8 + feat14 + feat20, data = TrainSet, family = binomial(link = "logit"))
+summary(log_mod2)
+
+glm.probs2 <- plogis(predict(log_mod2, ValidSet, type = "response"))
+optCutOff2 <- optimalCutoff(ValidSet$target, glm.probs2)
+
+
+plotROC(ValidSet$target, glm.probs2) 
+
+
+confusionMatrix(ValidSet$target, glm.probs2, threshold = optCutOff2)
+
+y_true2 = 5662 + 4910
+total2 = 5662 + 4910 + 2408 + 2020
+accuracy2 = y_true2/total2
+accuracy2
+tp2 = 4910
+fn2 = 2408
+tn2 = 5662
+fp2 = 2020
+TPR2 = tp2 / (tp2 + fn2)
+FPR2 = fp2 / (fp2 + tn2)
+TNR2 = tn2 / ( fp2 + tn2)
+Precision2 = tp2 / (tp2 + fp2)
+TPR2
+FPR2
+TNR2
+Precision2
+F1_2 = 2*(Precision2 * TPR2)/(Precision2 + TPR2)
+F1_2
+
+# Accuracy = 70.48%
+
+
+
+log_mod3 = glm(target ~ feat13 * feat66 + feat71 + feat4 + feat8 + feat14 + feat20, data = TrainSet, family = binomial(link = "logit"))
+summary(log_mod3)
+
+glm.probs3 <- plogis(predict(log_mod3, ValidSet, type = "response"))
+optCutOff3 <- optimalCutoff(ValidSet$target, glm.probs3)
+
+
+plotROC(ValidSet$target, glm.probs3) 
+
+
+confusionMatrix(ValidSet$target, glm.probs3, threshold = optCutOff3)
+
+y_true3 = 5681 + 4890
+total3 = 5681 + 4890 + 2428 + 2001
+accuracy3 = y_true3/total3
+accuracy3
+tp3 = 4890
+fn3 = 2428
+tn3 = 5681
+fp3 = 2001
+TPR3 = tp3 / (tp3 + fn3)
+FPR3 = fp3 / (fp3 + tn3)
+TNR3 = tn3 / ( fp3 + tn3)
+Precision3 = tp3 / (tp3 + fp3)
+TPR3
+FPR3
+TNR3
+Precision3
+F1_3 = 2*(Precision3 * TPR3)/(Precision3 + TPR3)
+F1_3
+# Accuracy = 70.47%
